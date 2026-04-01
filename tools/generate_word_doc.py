@@ -1,0 +1,532 @@
+#!/usr/bin/env python3
+"""
+Generate Word document with AI News table:
+- Title (hyperlinked) + Date + Source | Summary (with optional Chinese translation)
+
+Uses python-docx for formatting
+"""
+
+import os
+import sys
+import json
+import re
+import argparse
+import time
+from datetime import datetime
+from dotenv import load_dotenv
+
+# Add parent directory to path for imports
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from tools.utils import format_date_for_display
+
+try:
+    from docx import Document
+    from docx.shared import Inches, Pt, RGBColor
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+    from docx.oxml import OxmlElement
+    from docx.oxml.ns import qn
+except ImportError:
+    print("ERROR: python-docx not installed. Run: pip install python-docx")
+    sys.exit(1)
+
+try:
+    import requests
+except ImportError:
+    print("ERROR: requests not installed. Run: pip install requests")
+    sys.exit(1)
+
+
+def add_hyperlink(paragraph, url: str, text: str):
+    """
+    Add a hyperlink to a paragraph
+
+    python-docx doesn't have native hyperlink support, so we use XML
+
+    Args:
+        paragraph: docx paragraph object
+        url: URL to link to
+        text: Link text
+    """
+    # Create hyperlink element
+    part = paragraph.part
+    r_id = part.relate_to(url, 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink', is_external=True)
+
+    hyperlink = OxmlElement('w:hyperlink')
+    hyperlink.set(qn('r:id'), r_id)
+
+    # Create run element
+    run = OxmlElement('w:r')
+
+    # Run properties (style)
+    rPr = OxmlElement('w:rPr')
+
+    # Blue color
+    color = OxmlElement('w:color')
+    color.set(qn('w:val'), '0563C1')
+    rPr.append(color)
+
+    # Underline
+    u = OxmlElement('w:u')
+    u.set(qn('w:val'), 'single')
+    rPr.append(u)
+
+    run.append(rPr)
+
+    # Add text
+    text_elem = OxmlElement('w:t')
+    text_elem.text = text
+    run.append(text_elem)
+
+    hyperlink.append(run)
+    paragraph._p.append(hyperlink)
+
+
+def add_formatted_text(paragraph, text: str, font_size: int = 10):
+    """
+    Add text to paragraph with markdown bold (**text**) converted to Word bold
+
+    Args:
+        paragraph: docx paragraph object
+        text: Text that may contain **bold** markdown
+        font_size: Font size in points
+    """
+    # Pattern to match **bold** text
+    pattern = r'\*\*(.+?)\*\*'
+
+    last_end = 0
+    for match in re.finditer(pattern, text):
+        # Add text before the bold part
+        if match.start() > last_end:
+            run = paragraph.add_run(text[last_end:match.start()])
+            run.font.size = Pt(font_size)
+
+        # Add bold text
+        run = paragraph.add_run(match.group(1))
+        run.bold = True
+        run.font.size = Pt(font_size)
+
+        last_end = match.end()
+
+    # Add remaining text after last match
+    if last_end < len(text):
+        run = paragraph.add_run(text[last_end:])
+        run.font.size = Pt(font_size)
+
+
+def translate_to_chinese_claude(api_key: str, text: str) -> str:
+    """
+    Translate text to Chinese using Claude API
+
+    Args:
+        api_key: Anthropic API key
+        text: Text to translate
+
+    Returns:
+        Chinese translation
+    """
+    try:
+        url = "https://api.anthropic.com/v1/messages"
+
+        headers = {
+            'Content-Type': 'application/json',
+            'x-api-key': api_key,
+            'anthropic-version': '2023-06-01'
+        }
+
+        payload = {
+            "model": "claude-sonnet-4-20250514",
+            "max_tokens": 500,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": f"Translate the following text to Simplified Chinese. Only output the translation, nothing else.\n\n{text}"
+                }
+            ]
+        }
+
+        response = requests.post(url, json=payload, headers=headers, timeout=30)
+        response.raise_for_status()
+
+        result = response.json()
+
+        if 'content' in result and len(result['content']) > 0:
+            return result['content'][0]['text'].strip()
+        else:
+            print(f"  WARNING: Unexpected Claude response format")
+            return ""
+
+    except Exception as e:
+        print(f"  WARNING: Translation failed: {e}")
+        return ""
+
+
+def extract_funding_with_openai(api_key: str, start_date: str, end_date: str) -> list:
+    """
+    Use OpenAI with web search to find AI company funding events in a date range.
+
+    Args:
+        api_key: OpenAI API key
+        start_date: YYYY-MM-DD start date
+        end_date: YYYY-MM-DD end date
+
+    Returns:
+        List of funding event dicts with keys: date, company, summary, stage, raise, investors
+    """
+    prompt = f"""Search the web for AI company funding rounds, investments, and acquisitions announced between {start_date} and {end_date}.
+
+For each funding event found, return a JSON object. Return a JSON array of objects with exactly these fields:
+- "date": announcement date in YYYY-MM-DD format
+- "company": company name that received funding
+- "summary": one sentence describing what the company does (not the funding itself)
+- "stage": funding stage (Seed, Series A, Series B, etc., or "N/A" if unknown, or "Acquisition" if acquired)
+- "raise": amount raised (e.g. "$50M", "$1.2B", or "N/A" if unknown)
+- "investors": string listing lead investors (e.g. "Led by Sequoia, with Andreessen Horowitz")
+
+Only include actual AI company funding events (money raised, acquisitions, IPOs). Return ONLY a valid JSON array, no other text."""
+
+    try:
+        headers = {
+            'Content-Type': 'application/json',
+            'Authorization': f'Bearer {api_key}'
+        }
+        payload = {
+            "model": "gpt-4o-search-preview",
+            "web_search_options": {},
+            "messages": [{"role": "user", "content": prompt}],
+        }
+
+        for attempt in range(3):
+            response = requests.post(
+                "https://api.openai.com/v1/chat/completions",
+                json=payload, headers=headers, timeout=90
+            )
+            if response.status_code == 429:
+                wait = 20 * (attempt + 1)
+                print(f"  Rate limited, waiting {wait}s...")
+                time.sleep(wait)
+                continue
+            break
+
+        result = response.json()
+        if 'choices' not in result:
+            print(f"  OpenAI response: {result}")
+            return []
+
+        content = result['choices'][0]['message']['content'].strip()
+
+        # Try to extract JSON array from content (model may wrap it in prose)
+        json_match = re.search(r'```(?:json)?\s*(\[.*?\])\s*```', content, re.DOTALL)
+        if json_match:
+            content = json_match.group(1)
+        else:
+            array_match = re.search(r'(\[.*\])', content, re.DOTALL)
+            if array_match:
+                content = array_match.group(1)
+            else:
+                # Model returned prose with no JSON (e.g. "no events found")
+                return []
+
+        funding_events = json.loads(content)
+        return funding_events if isinstance(funding_events, list) else []
+
+    except Exception as e:
+        print(f"  WARNING: Funding extraction failed: {e}")
+        return []
+
+
+def create_funding_table(doc: Document, funding_events: list):
+    """
+    Add AI Fundraising News section with a 6-column table.
+
+    Args:
+        doc: Document object
+        funding_events: List of funding event dicts
+    """
+    doc.add_paragraph('')
+    heading = doc.add_heading('AI Fundraising News', level=1)
+    heading.alignment = WD_ALIGN_PARAGRAPH.LEFT
+
+    if not funding_events:
+        doc.add_paragraph('No AI funding events found in this date range.')
+        return
+
+    doc.add_paragraph(f'Total: {len(funding_events)} funding events\n')
+
+    # Create table with 6 columns
+    table = doc.add_table(rows=1, cols=6)
+    table.style = 'Light Grid Accent 1'
+
+    # Set column widths
+    col_widths = [Inches(0.85), Inches(1.0), Inches(2.2), Inches(0.7), Inches(0.7), Inches(1.55)]
+    for i, width in enumerate(col_widths):
+        table.columns[i].width = width
+
+    # Header row
+    headers = ['Date', 'Company', 'Summary', 'Stage', 'Raise', 'Investors']
+    header_cells = table.rows[0].cells
+    for i, h in enumerate(headers):
+        header_cells[i].text = h
+        for run in header_cells[i].paragraphs[0].runs:
+            run.bold = True
+            run.font.size = Pt(10)
+
+    # Sort by date oldest first
+    funding_events.sort(key=lambda x: x.get('date', ''))
+
+    # Data rows
+    for event in funding_events:
+        row_cells = table.add_row().cells
+        values = [
+            event.get('date', '')[:10],
+            event.get('company', 'N/A'),
+            event.get('summary', 'N/A'),
+            event.get('stage', 'N/A'),
+            event.get('raise', 'N/A'),
+            event.get('investors', 'N/A'),
+        ]
+        for i, val in enumerate(values):
+            para = row_cells[i].paragraphs[0]
+            run = para.add_run(str(val))
+            run.font.size = Pt(9)
+
+
+def convert_bullets_to_paragraph(text: str) -> str:
+    """
+    Convert bullet point text to paragraph format.
+    Removes bullet markers and joins into flowing text.
+
+    Args:
+        text: Text with potential bullet points
+
+    Returns:
+        Text as paragraph without bullets
+    """
+    # Remove common bullet markers and clean up
+    lines = text.split('\n')
+    cleaned_lines = []
+    for line in lines:
+        line = line.strip()
+        # Remove bullet markers
+        line = re.sub(r'^[\-\*•]\s*', '', line)
+        line = re.sub(r'^\d+[\.\)]\s*', '', line)
+        if line:
+            cleaned_lines.append(line)
+
+    # Join with spaces to form paragraph
+    return ' '.join(cleaned_lines)
+
+
+def create_news_table(doc: Document, articles: list, max_articles: int = None, translate: bool = False, claude_key: str = None, chinese_only: bool = False):
+    """
+    Create AI News table with 2 columns: Date | Title + Summary
+
+    Args:
+        doc: Document object
+        articles: List of articles with summaries
+        max_articles: Maximum number of articles to include (None = all)
+        translate: Whether to add Chinese translation
+        claude_key: Anthropic API key for translation
+    """
+    # Sort by date (oldest first)
+    articles.sort(key=lambda x: x.get('published_at', ''), reverse=False)
+
+    # Limit articles if specified
+    if max_articles:
+        articles = articles[:max_articles]
+
+    # Add heading
+    heading = doc.add_heading('AI News Summary', level=1)
+    heading.alignment = WD_ALIGN_PARAGRAPH.LEFT
+
+    # Add count
+    doc.add_paragraph(f'Total: {len(articles)} articles\n')
+
+    # Create table with 2 columns
+    table = doc.add_table(rows=1, cols=2)
+    table.style = 'Light Grid Accent 1'
+
+    # Set column widths
+    table.columns[0].width = Inches(1.0)  # Date
+    table.columns[1].width = Inches(6.0)  # Title + Summary
+
+    # Header row
+    header_cells = table.rows[0].cells
+    header_cells[0].text = 'Date'
+    header_cells[1].text = 'Summary'
+
+    # Format header
+    for cell in header_cells:
+        for paragraph in cell.paragraphs:
+            for run in paragraph.runs:
+                run.bold = True
+                run.font.size = Pt(12)
+
+    # Add data rows
+    for i, article in enumerate(articles):
+        if translate:
+            print(f"  [{i+1}/{len(articles)}] Translating...")
+
+        row_cells = table.add_row().cells
+
+        # Column 1: Date only
+        date_str = format_date_for_display(article.get('published_at', ''))
+        date_cell = row_cells[0]
+        date_para = date_cell.paragraphs[0]
+        date_run = date_para.add_run(date_str)
+        date_run.font.size = Pt(10)
+
+        # Column 2: Title (hyperlinked) + Summary
+        summary_cell = row_cells[1]
+        summary_para = summary_cell.paragraphs[0]
+
+        # Add hyperlinked title
+        title = article.get('title', 'No title')
+        url = article.get('url', '')
+        if url:
+            add_hyperlink(summary_para, url, title)
+        else:
+            run = summary_para.add_run(title)
+            run.bold = True
+            run.font.size = Pt(10)
+
+        # Get summary and convert bullets to paragraph
+        summary = article.get('summary', article.get('description', 'No summary available'))
+        summary_paragraph = convert_bullets_to_paragraph(summary)
+
+        if chinese_only:
+            # Use summary as-is (already in Chinese from --language zh summarization)
+            summary_para.add_run("\n\n")
+            add_formatted_text(summary_para, summary_paragraph, font_size=10)
+        elif translate and claude_key:
+            # Add Chinese translation first, then English
+            chinese = translate_to_chinese_claude(claude_key, summary_paragraph)
+            if chinese:
+                summary_para.add_run("\n\n")
+                add_formatted_text(summary_para, chinese, font_size=10)
+                time.sleep(0.5)  # Rate limiting for Claude
+            summary_para.add_run("\n\n")
+            add_formatted_text(summary_para, summary_paragraph, font_size=10)
+        else:
+            # English only
+            summary_para.add_run("\n\n")
+            add_formatted_text(summary_para, summary_paragraph, font_size=10)
+
+    return table
+
+
+def generate_word_doc(start_date: str, end_date: str,
+                      articles_file: str = '.tmp/summarized_articles.json',
+                      output_dir: str = 'output',
+                      max_articles: int = None,
+                      translate: bool = False,
+                      chinese_only: bool = False,
+                      output_prefix: str = 'AI_News'):
+    """
+    Main document generation function
+
+    Args:
+        start_date: YYYY-MM-DD
+        end_date: YYYY-MM-DD
+        articles_file: Path to summarized articles JSON
+        output_dir: Output directory
+        max_articles: Maximum articles to include (None = all)
+        translate: Add Chinese translation using Claude
+    """
+    load_dotenv()
+
+    print("Loading data...")
+
+    # Load summarized articles
+    if not os.path.exists(articles_file):
+        print(f"ERROR: {articles_file} not found")
+        print("Make sure to run summarize_articles.py first")
+        sys.exit(1)
+
+    with open(articles_file, 'r', encoding='utf-8') as f:
+        articles = json.load(f)
+
+    print(f"Loaded {len(articles)} articles")
+
+    # Check for Claude API key if translation is requested
+    claude_key = None
+    if translate:
+        claude_key = os.getenv('ANTHROPIC_API_KEY')
+        if not claude_key:
+            print("ERROR: ANTHROPIC_API_KEY not found in .env file")
+            sys.exit(1)
+        print("Translation enabled (Claude)")
+
+    # Check for OpenAI key for funding extraction
+    openai_key = os.getenv('OPENAI_API_KEY')
+
+    # Create document
+    print("Creating Word document...")
+    doc = Document()
+
+    # Title
+    title = doc.add_heading(f'AI News Report', level=0)
+    title.alignment = WD_ALIGN_PARAGRAPH.CENTER
+
+    # Subtitle with date range
+    subtitle = doc.add_paragraph(f'{start_date} to {end_date}')
+    subtitle.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    for run in subtitle.runs:
+        run.font.size = Pt(14)
+        run.font.color.rgb = RGBColor(128, 128, 128)
+
+    # Metadata
+    doc.add_paragraph(f'Generated: {datetime.now().strftime("%Y-%m-%d %H:%M")}')
+    doc.add_paragraph(f'Total Articles Collected: {len(articles)}')
+    doc.add_paragraph('')
+
+    # Create news table
+    print("Creating news table...")
+    create_news_table(doc, articles, max_articles, translate, claude_key, chinese_only)
+
+    # Create funding section
+    print("Searching for AI funding news with ChatGPT...")
+    if openai_key:
+        funding_events = extract_funding_with_openai(openai_key, start_date, end_date)
+        print(f"  Found {len(funding_events)} funding events")
+        create_funding_table(doc, funding_events)
+    else:
+        print("  WARNING: OPENAI_API_KEY not set, skipping funding section")
+
+    # Save document
+    os.makedirs(output_dir, exist_ok=True)
+    filename = f'{output_prefix}_{start_date.replace("-", "")}_{end_date.replace("-", "")}.docx'
+    filepath = os.path.join(output_dir, filename)
+
+    doc.save(filepath)
+
+    print(f"\n✓ Document saved to {filepath}")
+    return filepath
+
+
+def main():
+    """Main execution function"""
+    parser = argparse.ArgumentParser(description='Generate AI News Word document')
+    parser.add_argument('--start_date', required=True, help='Start date (YYYY-MM-DD)')
+    parser.add_argument('--end_date', required=True, help='End date (YYYY-MM-DD)')
+    parser.add_argument('--articles', default='.tmp/summarized_articles.json', help='Summarized articles file')
+    parser.add_argument('--output_dir', default='output', help='Output directory')
+    parser.add_argument('--max', type=int, default=None, help='Maximum articles to include (default: all)')
+    parser.add_argument('--translate', action='store_true', help='Add Chinese translation using ChatGPT')
+    parser.add_argument('--chinese-only', action='store_true', help='Output Chinese summary only (no English), for pre-summarized Chinese articles')
+    parser.add_argument('--output-prefix', default='AI_News', help='Output filename prefix (default: AI_News)')
+    args = parser.parse_args()
+
+    generate_word_doc(
+        args.start_date,
+        args.end_date,
+        args.articles,
+        args.output_dir,
+        args.max,
+        args.translate,
+        args.chinese_only,
+        args.output_prefix
+    )
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,10 @@
+Issues (FIXED):
+1. ✓ Text bolding - markdown **bold** now converts to Word bold
+2. ✓ Table formatting - now 2 columns (Article | Summary)
+3. ✓ Chinese translation - use --translate flag (requires OPENAI_API_KEY in .env)
+
+Usage:
+  python tools/generate_word_doc.py --start_date 2026-01-13 --end_date 2026-01-29 --articles .tmp/summarized_articles_filtered.json
+
+  # With Chinese translation:
+  python tools/generate_word_doc.py --start_date 2026-01-13 --end_date 2026-01-29 --articles .tmp/summarized_articles_filtered.json --translate

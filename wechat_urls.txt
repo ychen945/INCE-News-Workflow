@@ -1,0 +1,27 @@
+# WeChat Article URLs for Consumer News
+# One URL per line. Lines starting with # are ignored.
+# Update this file before each run with articles for the current period.
+#
+# Common sources: 36Kr (36氪), LatePost (晚点LatePost), 虎嗅 (Huxiu), 品玩 (PingWest), etc.
+# Format: https://mp.weixin.qq.com/s/[article_id]
+#
+# Example:
+# https://mp.weixin.qq.com/s/abc123xyz
+
+https://mp.weixin.qq.com/s/mpt0mRBXhVohgog_68IxWw
+https://mp.weixin.qq.com/s/SE-NpVjJANiz5i5hWb3mOQ
+https://mp.weixin.qq.com/s/BmY4sfyR0TC9r3zGiWbatA
+https://mp.weixin.qq.com/s/PC4SHTIr6S8VlZOOgwsfnw
+https://mp.weixin.qq.com/s/P5J6pvXm9zkVbcablIwXLw
+https://mp.weixin.qq.com/s/fUKDepz01MuOkDTH_e02bQ
+https://mp.weixin.qq.com/s/t9YN9rfZDBNDLIJYVKXBYQ
+https://mp.weixin.qq.com/s/X3DxyFVtujVeJ1wn0i-fXg
+https://mp.weixin.qq.com/s/kXI4q49s4BUR9A79Kfac9w
+https://mp.weixin.qq.com/s/3HBMVhHgsYDVg6nr0efGFQ
+https://mp.weixin.qq.com/s/PjK5nM9eHKa_lv61SNJIHg
+https://mp.weixin.qq.com/s/_m3_bCFNC6V-TYsvibwvKA
+https://mp.weixin.qq.com/s/axURHF0-7Geax5HtupjDBw
+https://mp.weixin.qq.com/s/KIzIXMnON2w-8n3picIsqg
+https://mp.weixin.qq.com/s/QBXg5o792wD45O_NVZxkug
+https://mp.weixin.qq.com/s/MPIMtvk2QZX5RBz9yluWxw
+https://mp.weixin.qq.com/s/eXaUK61RVd9gYhdSXpHcFg

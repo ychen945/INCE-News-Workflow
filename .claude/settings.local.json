@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python tools/collect_wechat.py --urls wechat_urls.txt)",
+      "Bash(python3 -c \":*)"
+    ]
+  }
+}

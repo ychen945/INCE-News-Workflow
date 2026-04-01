@@ -1,0 +1,181 @@
+CONSUMER NEWS TOOL — SETUP & USAGE GUIDE
+==========================================
+
+WHAT IT DOES
+------------
+Takes a list of WeChat article URLs that you provide, fetches each article,
+summarizes it in Chinese using Claude, classifies it as either 行业动态 (industry
+updates) or 融资新闻 (funding news), and generates a formatted Word document
+with two sections.
+
+Cost per run: ~$0.35–0.75 | Runtime: ~5–10 minutes
+
+
+FILES NEEDED FROM YOUR COLLEAGUE
+----------------------------------
+The following files make up this tool. Make sure you have all of them:
+
+  tools/
+    collect_wechat.py         -- fetches WeChat articles from your URL list
+    summarize_articles.py     -- classifies and summarizes articles with Claude
+    generate_consumer_doc.py  -- generates the Word document
+    utils.py                  -- shared utilities (required by other tools)
+
+  workflows/
+    collect_consumer_news.md  -- full SOP reference
+
+  wechat_urls.txt             -- your article URL list (you update this each run)
+  .env.example                -- template for API keys
+  requirements.txt            -- Python package dependencies
+
+
+PREREQUISITES
+-------------
+- Python 3.9+
+- Two API keys (details in Step 3)
+- WeChat article URLs you want to summarize
+
+
+STEP 1 — INSTALL PYTHON DEPENDENCIES
+--------------------------------------
+Open a terminal, navigate to the project folder, and run:
+
+  python -m venv venv
+  source venv/bin/activate       # Mac/Linux
+  # OR on Windows:
+  # venv\Scripts\activate
+
+  pip install -r requirements.txt
+  pip install anthropic
+
+
+STEP 2 — GET API KEYS
+----------------------
+You need 2 API keys:
+
+  ANTHROPIC_API_KEY   -> console.anthropic.com/settings/keys   Pay-per-use (~$0.30–0.60/run)
+  OPENAI_API_KEY      -> platform.openai.com/api-keys          Pay-per-use (~$0.05–0.15/run)
+
+Note: OpenAI is only needed for the 融资新闻 funding search section.
+      If you skip it, that section will be blank but everything else works fine.
+
+
+STEP 3 — SET UP YOUR .env FILE
+--------------------------------
+Copy .env.example to .env and fill in your keys:
+
+  cp .env.example .env
+
+Open .env and add:
+
+  ANTHROPIC_API_KEY=your_key_here
+  OPENAI_API_KEY=your_key_here    # optional, for funding news section
+
+
+STEP 4 — ADD YOUR ARTICLE URLs
+--------------------------------
+Open wechat_urls.txt and paste in the WeChat article URLs for this period.
+One URL per line. Lines starting with # are treated as comments.
+
+  # Consumer News — 2026-03-10 to 2026-03-23
+  # Sources: 36Kr, LatePost, 虎嗅, etc.
+  https://mp.weixin.qq.com/s/abc123
+  https://mp.weixin.qq.com/s/def456
+  https://mp.weixin.qq.com/s/ghi789
+
+Tips:
+- Duplicate URLs are automatically skipped
+- Articles must be publicly accessible (not behind a login)
+- Works best with standard WeChat public account articles (mp.weixin.qq.com/s/...)
+
+
+STEP 5 — RUN THE TOOL
+-----------------------
+Set your date range and run all four phases:
+
+  START_DATE="2026-03-10"
+  END_DATE="2026-03-23"
+
+  # Phase 1: Fetch articles from your URL list
+  python tools/collect_wechat.py --urls wechat_urls.txt
+
+  # Phase 2: Deduplicate
+  python3 -c "
+  import json
+  articles = json.load(open('.tmp/raw_wechat.json'))
+  seen, unique = set(), []
+  for a in articles:
+      url = a.get('url', '')
+      if url and url not in seen:
+          seen.add(url); unique.append(a)
+  json.dump(unique, open('.tmp/classified_wechat.json', 'w'), ensure_ascii=False, indent=2)
+  print(f'Deduped: {len(unique)} articles')
+  "
+
+  # Phase 3: Classify and summarize in Chinese
+  python tools/summarize_articles.py \
+    --input .tmp/classified_wechat.json \
+    --output .tmp/summarized_wechat.json \
+    --provider claude --consumer --yes
+
+  # Phase 4: Generate Word document
+  python tools/generate_consumer_doc.py \
+    --start_date $START_DATE --end_date $END_DATE \
+    --articles .tmp/summarized_wechat.json
+
+
+STEP 6 — GET YOUR OUTPUT
+--------------------------
+The finished Word document is saved to:
+
+  output/Consumer_News_YYYYMMDD_YYYYMMDD.docx
+
+It contains two sections:
+- 行业动态: Articles about new products, brand news, market trends, industry updates
+- 融资新闻: Articles about startup fundraising, pre-IPO news, investments
+  (Each funding article includes product overview, founder info, revenue status,
+   and company size where available in the source article)
+
+
+HOW ARTICLES ARE CLASSIFIED
+-----------------------------
+Claude reads each article and automatically decides which section it belongs to:
+
+  行业动态 — New product launches, brand announcements, market data,
+             industry trends, company operational news
+
+  融资新闻 — Funding rounds (Seed, Series A/B/C...), Pre-IPO news,
+             strategic investments, acquisitions
+
+
+COMMON ISSUES
+-------------
+Problem: Article fetched but title/content is empty
+Fix:     Open the URL in a browser to confirm it's publicly accessible.
+         Some WeChat articles require login — these cannot be scraped.
+
+Problem: Summary starts with meta-phrases like "本文报道了"
+Fix:     This is handled automatically. The prompt instructs Claude to skip
+         intro phrases and start directly with the news.
+
+Problem: ANTHROPIC_API_KEY not found
+Fix:     Check that your .env file exists and contains the key (not just .env.example)
+
+Problem: OpenAI insufficient_quota error
+Fix:     Add billing credits at platform.openai.com/billing.
+         Or simply skip the OpenAI key — the 融资新闻 section will show
+         "本期暂无融资新闻" but the rest of the doc will be fine.
+
+Problem: Wrong articles in wrong section
+Fix:     Claude's classification is usually accurate. If an article is
+         consistently misclassified, the article title/content may not
+         clearly indicate its category. This is rare.
+
+
+TYPICAL RUNTIME
+---------------
+- Phase 1 (fetch):        1–3 min depending on number of URLs
+- Phase 2 (dedup):        ~5 seconds
+- Phase 3 (summarize):    ~30 seconds per article (Claude API)
+- Phase 4 (generate doc): ~1 min
+- Total for 20 articles:  ~12–15 minutes
