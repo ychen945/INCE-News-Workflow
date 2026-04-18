@@ -640,5 +640,6 @@ def _pipeline_crypto(job_id, start_date, end_date, min_amount):
 if __name__ == "__main__":
     OUTPUT_DIR.mkdir(exist_ok=True)
     TMP_DIR.mkdir(exist_ok=True)
-    print("Starting INCE News Dashboard on http://0.0.0.0:5001")
-    app.run(host="0.0.0.0", port=5001, debug=False, threaded=True)
+    port = int(os.environ.get("PORT", 5001))
+    print(f"Starting INCE News Dashboard on http://0.0.0.0:{port}")
+    app.run(host="0.0.0.0", port=port, debug=False, threaded=True)
