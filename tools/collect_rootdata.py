@@ -112,6 +112,8 @@ def parse_date(text: str) -> str:
 # ── Selenium helpers ────────────────────────────────────────────────────────────
 
 def _make_driver() -> webdriver.Chrome:
+    from selenium.webdriver.chrome.service import Service
+
     options = Options()
     options.add_argument("--headless")
     options.add_argument("--no-sandbox")
@@ -124,6 +126,17 @@ def _make_driver() -> webdriver.Chrome:
         "user-agent=Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
         "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
     )
+
+    # Use Chromium binary/driver if set (Docker/Railway deployment)
+    chrome_bin = os.environ.get("CHROME_BIN")
+    chromedriver_path = os.environ.get("CHROMEDRIVER_PATH")
+
+    if chrome_bin:
+        options.binary_location = chrome_bin
+
+    if chromedriver_path:
+        return webdriver.Chrome(service=Service(chromedriver_path), options=options)
+
     return webdriver.Chrome(options=options)
 
 
