@@ -75,42 +75,58 @@ ALL_KNOWN_SECTIONS = [
 
 def get_gmail_service():
     """
-    Authenticate and return Gmail API service
+    Authenticate and return Gmail API service.
 
-    Returns:
-        Gmail API service object
+    Token resolution order:
+      1. GMAIL_TOKEN_JSON env var (used on Railway / any server deployment)
+      2. token.json file on disk (used locally)
     """
+    import tempfile
+
     creds = None
 
-    # Load existing token
-    if os.path.exists('token.json'):
-        creds = Credentials.from_authorized_user_file('token.json', SCOPES)
+    # ── Load token ────────────────────────────────────────────────────────────
+    token_json_env = os.environ.get("GMAIL_TOKEN_JSON")
 
-    # Refresh or create new token
+    if token_json_env:
+        # Write env var content to a temp file so Credentials can read it
+        try:
+            tmp = tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False)
+            tmp.write(token_json_env)
+            tmp.close()
+            creds = Credentials.from_authorized_user_file(tmp.name, SCOPES)
+            os.unlink(tmp.name)
+            print("  Loaded Gmail token from GMAIL_TOKEN_JSON env var")
+        except Exception as e:
+            print(f"ERROR: Could not parse GMAIL_TOKEN_JSON: {e}")
+            sys.exit(1)
+    elif os.path.exists('token.json'):
+        creds = Credentials.from_authorized_user_file('token.json', SCOPES)
+        print("  Loaded Gmail token from token.json")
+    else:
+        print("ERROR: No Gmail token found.")
+        print("  Locally: run the app once to complete OAuth — token.json will be created.")
+        print("  On Railway: set the GMAIL_TOKEN_JSON environment variable.")
+        sys.exit(1)
+
+    # ── Refresh if expired ────────────────────────────────────────────────────
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
-            print("Refreshing expired token...")
+            print("  Refreshing expired Gmail token...")
             creds.refresh(Request())
+
+            # Persist refreshed token back to disk (local) or env hint (server)
+            if not token_json_env and os.path.exists('token.json'):
+                with open('token.json', 'w') as f:
+                    f.write(creds.to_json())
+            else:
+                print("  NOTE: Token refreshed in memory. Update GMAIL_TOKEN_JSON")
+                print("  on Railway with this new value to avoid re-refreshing:")
+                print(f"  {creds.to_json()}")
         else:
-            if not os.path.exists('credentials.json'):
-                print("ERROR: credentials.json not found!")
-                print("\nSetup instructions:")
-                print("1. Go to https://console.cloud.google.com/")
-                print("2. Create a new project (or select existing)")
-                print("3. Enable Gmail API")
-                print("4. Create OAuth 2.0 credentials (Desktop app)")
-                print("5. Download credentials.json to project root")
-                sys.exit(1)
-
-            print("Starting OAuth flow...")
-            print("A browser window will open for authentication.")
-            flow = InstalledAppFlow.from_client_secrets_file('credentials.json', SCOPES)
-            creds = flow.run_local_server(port=0)
-
-        # Save token for future runs
-        with open('token.json', 'w') as token:
-            token.write(creds.to_json())
-        print("✓ Authentication successful")
+            print("ERROR: Gmail token is invalid and cannot be refreshed.")
+            print("  Delete token.json locally, re-authenticate, then update GMAIL_TOKEN_JSON on Railway.")
+            sys.exit(1)
 
     return build('gmail', 'v1', credentials=creds)
 
