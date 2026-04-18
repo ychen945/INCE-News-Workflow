@@ -1,2 +1,0 @@
-1. Use link to pdf converter for Tech and Consumers news 
-2. convert pdf to text then consolidate 

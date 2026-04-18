@@ -160,19 +160,29 @@ def translate_to_chinese_claude(api_key: str, text: str) -> str:
         return ""
 
 
-def extract_funding_with_openai(api_key: str, start_date: str, end_date: str) -> list:
+def extract_funding_with_openai(api_key: str, start_date: str, end_date: str,
+                               topic: str = 'ai') -> list:
     """
-    Use OpenAI with web search to find AI company funding events in a date range.
+    Use OpenAI with web search to find funding events in a date range.
 
     Args:
         api_key: OpenAI API key
         start_date: YYYY-MM-DD start date
         end_date: YYYY-MM-DD end date
+        topic: 'ai' (default) or 'deeptech'
 
     Returns:
         List of funding event dicts with keys: date, company, summary, stage, raise, investors
     """
-    prompt = f"""Search the web for AI company funding rounds, investments, and acquisitions announced between {start_date} and {end_date}.
+    if topic == 'deeptech':
+        sector_desc = (
+            "deep technology companies — including robotics, advanced materials, quantum computing, "
+            "biotech/medtech, space technology, semiconductors, clean energy, and other science-based startups"
+        )
+    else:
+        sector_desc = "AI / artificial intelligence companies"
+
+    prompt = f"""Search the web for {sector_desc} funding rounds, investments, and acquisitions announced between {start_date} and {end_date}.
 
 For each funding event found, return a JSON object. Return a JSON array of objects with exactly these fields:
 - "date": announcement date in YYYY-MM-DD format
@@ -182,7 +192,7 @@ For each funding event found, return a JSON object. Return a JSON array of objec
 - "raise": amount raised (e.g. "$50M", "$1.2B", or "N/A" if unknown)
 - "investors": string listing lead investors (e.g. "Led by Sequoia, with Andreessen Horowitz")
 
-Only include actual AI company funding events (money raised, acquisitions, IPOs). Return ONLY a valid JSON array, no other text."""
+Only include actual funding events (money raised, acquisitions, IPOs). Return ONLY a valid JSON array, no other text."""
 
     try:
         headers = {
@@ -234,20 +244,21 @@ Only include actual AI company funding events (money raised, acquisitions, IPOs)
         return []
 
 
-def create_funding_table(doc: Document, funding_events: list):
+def create_funding_table(doc: Document, funding_events: list, heading: str = 'AI Fundraising News'):
     """
-    Add AI Fundraising News section with a 6-column table.
+    Add Fundraising News section with a 6-column table.
 
     Args:
         doc: Document object
         funding_events: List of funding event dicts
+        heading: Section heading text
     """
     doc.add_paragraph('')
-    heading = doc.add_heading('AI Fundraising News', level=1)
-    heading.alignment = WD_ALIGN_PARAGRAPH.LEFT
+    h = doc.add_heading(heading, level=1)
+    h.alignment = WD_ALIGN_PARAGRAPH.LEFT
 
     if not funding_events:
-        doc.add_paragraph('No AI funding events found in this date range.')
+        doc.add_paragraph('No funding events found in this date range.')
         return
 
     doc.add_paragraph(f'Total: {len(funding_events)} funding events\n')
@@ -420,7 +431,9 @@ def generate_word_doc(start_date: str, end_date: str,
                       max_articles: int = None,
                       translate: bool = False,
                       chinese_only: bool = False,
-                      output_prefix: str = 'AI_News'):
+                      output_prefix: str = 'AI_News',
+                      funding_topic: str = 'ai',
+                      doc_title: str = None):
     """
     Main document generation function
 
@@ -464,7 +477,8 @@ def generate_word_doc(start_date: str, end_date: str,
     doc = Document()
 
     # Title
-    title = doc.add_heading(f'AI News Report', level=0)
+    display_title = doc_title if doc_title else 'AI News Report'
+    title = doc.add_heading(display_title, level=0)
     title.alignment = WD_ALIGN_PARAGRAPH.CENTER
 
     # Subtitle with date range
@@ -484,11 +498,12 @@ def generate_word_doc(start_date: str, end_date: str,
     create_news_table(doc, articles, max_articles, translate, claude_key, chinese_only)
 
     # Create funding section
-    print("Searching for AI funding news with ChatGPT...")
+    topic_label = "Deeptech" if funding_topic == "deeptech" else "AI"
+    print(f"Searching for {topic_label} funding news with ChatGPT (live web search)...")
     if openai_key:
-        funding_events = extract_funding_with_openai(openai_key, start_date, end_date)
+        funding_events = extract_funding_with_openai(openai_key, start_date, end_date, funding_topic)
         print(f"  Found {len(funding_events)} funding events")
-        create_funding_table(doc, funding_events)
+        create_funding_table(doc, funding_events, heading=f"{topic_label} Fundraising News")
     else:
         print("  WARNING: OPENAI_API_KEY not set, skipping funding section")
 
@@ -514,6 +529,9 @@ def main():
     parser.add_argument('--translate', action='store_true', help='Add Chinese translation using ChatGPT')
     parser.add_argument('--chinese-only', action='store_true', help='Output Chinese summary only (no English), for pre-summarized Chinese articles')
     parser.add_argument('--output-prefix', default='AI_News', help='Output filename prefix (default: AI_News)')
+    parser.add_argument('--funding-topic', choices=['ai', 'deeptech'], default='ai',
+                        help='Funding search topic: ai (default) or deeptech')
+    parser.add_argument('--doc-title', default=None, help='Document title (default: AI News Report)')
     args = parser.parse_args()
 
     generate_word_doc(
@@ -524,7 +542,9 @@ def main():
         args.max,
         args.translate,
         args.chinese_only,
-        args.output_prefix
+        args.output_prefix,
+        args.funding_topic,
+        args.doc_title,
     )
 
 

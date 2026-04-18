@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% block title %}INCE News Dashboard{% endblock %}
+{% block content %}
+<div class="text-center mt-16">
+  <h1 class="text-3xl font-bold text-gray-800 mb-3">INCE News Dashboard</h1>
+  <p class="text-gray-500 mb-10">Select a report type to get started.</p>
+  <div class="grid grid-cols-2 sm:grid-cols-4 gap-5 max-w-2xl mx-auto">
+    <a href="/ai_news"
+       class="block bg-white border border-gray-200 rounded-xl p-6 hover:shadow-md hover:border-blue-300 transition-all text-left">
+      <div class="text-2xl mb-3">🤖</div>
+      <div class="font-semibold text-gray-800 mb-1">AI News</div>
+      <div class="text-xs text-gray-500">TLDR · TechCrunch · WeChat</div>
+    </a>
+    <a href="/deeptech"
+       class="block bg-white border border-gray-200 rounded-xl p-6 hover:shadow-md hover:border-blue-300 transition-all text-left">
+      <div class="text-2xl mb-3">🔬</div>
+      <div class="font-semibold text-gray-800 mb-1">Deeptech News</div>
+      <div class="text-xs text-gray-500">WeChat only</div>
+    </a>
+    <a href="/consumer"
+       class="block bg-white border border-gray-200 rounded-xl p-6 hover:shadow-md hover:border-blue-300 transition-all text-left">
+      <div class="text-2xl mb-3">🛍</div>
+      <div class="font-semibold text-gray-800 mb-1">Consumer News</div>
+      <div class="text-xs text-gray-500">WeChat only · 行业动态 + 融资</div>
+    </a>
+    <a href="/crypto"
+       class="block bg-white border border-gray-200 rounded-xl p-6 hover:shadow-md hover:border-blue-300 transition-all text-left">
+      <div class="text-2xl mb-3">₿</div>
+      <div class="font-semibold text-gray-800 mb-1">Crypto News</div>
+      <div class="text-xs text-gray-500">RootData · ≥$10M · Excel</div>
+    </a>
+  </div>
+</div>
+{% endblock %}

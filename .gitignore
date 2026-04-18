@@ -40,6 +40,9 @@ wheels/
 *~
 .DS_Store
 
+# Generated output
+output/
+
 # Logs
 *.log
 
