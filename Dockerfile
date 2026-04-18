@@ -29,4 +29,4 @@ ENV PORT=5001
 
 EXPOSE 5001
 
-CMD ["python", "webapp/app.py"]
+CMD gunicorn --bind 0.0.0.0:$PORT --timeout 600 --threads 4 webapp.app:app

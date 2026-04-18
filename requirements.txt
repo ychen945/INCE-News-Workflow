@@ -1,5 +1,9 @@
 # Core dependencies for the WAT framework
 
+# Web framework
+flask>=3.0.0
+gunicorn>=21.2.0
+
 # HTTP and web scraping
 requests>=2.31.0
 beautifulsoup4>=4.12.0
