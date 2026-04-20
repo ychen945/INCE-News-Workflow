@@ -435,10 +435,10 @@ def summarize_articles(input_file: str = '.tmp/classified_articles.json',
     if provider == 'claude':
         api_key = os.getenv('ANTHROPIC_API_KEY')
         if not api_key:
-            print("ERROR: ANTHROPIC_API_KEY not found in .env file")
+            print("ERROR: ANTHROPIC_API_KEY not found in environment")
             print("Get your API key at: https://console.anthropic.com/")
-            print("Then add it to your .env file:")
-            print("ANTHROPIC_API_KEY=your_key_here")
+            print("Locally: add ANTHROPIC_API_KEY=your_key to your .env file")
+            print("On Railway: add ANTHROPIC_API_KEY in the Variables tab, then redeploy")
             sys.exit(1)
         client = None
         print(f"Using Claude (claude-sonnet-4-20250514) for summarization")
