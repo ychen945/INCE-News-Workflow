@@ -45,7 +45,7 @@ except ImportError:
     sys.exit(1)
 
 BASE_URL = "https://www.rootdata.com/Fundraising"
-MAX_PAGES = 30
+MAX_PAGES = 5
 PAGE_DELAY = 1.5          # seconds between page navigations
 FILTER_WAIT = 8           # max seconds to wait for table to reload after filters
 
