@@ -49,6 +49,45 @@ except ImportError:
     sys.exit(1)
 
 
+# ── Fundraising detection ──────────────────────────────────────────────────────
+
+FUNDRAISING_KEYWORDS = [
+    "raises", "raised", "raise", "funding", "fundrais",
+    "series a", "series b", "series c", "series d", "series e",
+    "seed round", "pre-seed", "venture", "investment round",
+    "valuation", "unicorn", "acqui", "ipo", "goes public",
+    "million", "billion", "$", "融资", "投资", "轮", "估值", "收购",
+]
+
+
+def is_fundraising_article(article: dict) -> bool:
+    """Return True if the article is primarily about a funding/acquisition event."""
+    text = " ".join([
+        article.get("title", ""),
+        article.get("summary", ""),
+        article.get("description", ""),
+    ]).lower()
+    # Require at least 2 distinct keyword matches to reduce false positives
+    matches = sum(1 for kw in FUNDRAISING_KEYWORDS if kw in text)
+    return matches >= 2
+
+
+def article_to_funding_event(article: dict) -> dict:
+    """Convert a summarized article into the funding event dict format."""
+    return {
+        "date": article.get("published_at", "")[:10],
+        "company": "",   # model will fill from title/summary
+        "summary": article.get("summary", article.get("description", "")),
+        "stage": "N/A",
+        "raise": "N/A",
+        "valuation": "N/A",
+        "investors": "N/A",
+        # Keep title so the funding table can display it
+        "_title": article.get("title", ""),
+        "_url": article.get("url", ""),
+    }
+
+
 # ── Group definitions ──────────────────────────────────────────────────────────
 
 GROUP_ORDER = ["OpenAI", "Anthropic", "BigTech", "Other"]
@@ -266,6 +305,12 @@ def generate_ai_doc(
 
     print(f"Loaded {len(articles)} articles")
 
+    # Separate fundraising articles from regular news
+    regular_articles = [a for a in articles if not is_fundraising_article(a)]
+    funding_articles = [a for a in articles if is_fundraising_article(a)]
+    if funding_articles:
+        print(f"  Detected {len(funding_articles)} fundraising articles — moving to funding table")
+
     claude_key = None
     if translate:
         claude_key = os.getenv("ANTHROPIC_API_KEY")
@@ -293,17 +338,27 @@ def generate_ai_doc(
         run.font.color.rgb = RGBColor(128, 128, 128)
 
     doc.add_paragraph(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}")
-    doc.add_paragraph(f"Total Articles: {len(articles)}")
+    doc.add_paragraph(f"Total Articles: {len(regular_articles)} (+ {len(funding_articles)} moved to funding table)")
     doc.add_paragraph("")
 
     print("Creating grouped news table...")
-    create_grouped_news_table(doc, articles, chinese_only, translate, claude_key)
+    create_grouped_news_table(doc, regular_articles, chinese_only, translate, claude_key)
 
-    print("Searching for AI funding news with ChatGPT...")
+    print("Searching for AI funding news with ChatGPT (day by day)...")
     if openai_key:
         funding_events = extract_funding_with_openai(openai_key, start_date, end_date)
-        print(f"  Found {len(funding_events)} funding events")
-        create_funding_table(doc, funding_events)
+        # Merge in any fundraising articles detected from the news feed
+        detected = [article_to_funding_event(a) for a in funding_articles]
+        # Use title as company name if company field is empty
+        for e in detected:
+            if not e["company"]:
+                e["company"] = e.pop("_title", "")
+            else:
+                e.pop("_title", None)
+            e.pop("_url", None)
+        all_funding = funding_events + detected
+        print(f"  Found {len(funding_events)} from web search + {len(detected)} detected from articles")
+        create_funding_table(doc, all_funding)
     else:
         print("  WARNING: OPENAI_API_KEY not set — skipping funding section")
 

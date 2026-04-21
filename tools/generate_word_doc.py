@@ -160,19 +160,10 @@ def translate_to_chinese_claude(api_key: str, text: str) -> str:
         return ""
 
 
-def extract_funding_with_openai(api_key: str, start_date: str, end_date: str,
-                               topic: str = 'ai') -> list:
+def _search_funding_single_day(api_key: str, date: str, topic: str) -> list:
     """
-    Use OpenAI with web search to find funding events in a date range.
-
-    Args:
-        api_key: OpenAI API key
-        start_date: YYYY-MM-DD start date
-        end_date: YYYY-MM-DD end date
-        topic: 'ai' (default) or 'deeptech'
-
-    Returns:
-        List of funding event dicts with keys: date, company, summary, stage, raise, investors
+    Search for funding events on a single date using OpenAI web search.
+    Returns list of funding event dicts.
     """
     if topic == 'deeptech':
         sector_desc = (
@@ -182,7 +173,7 @@ def extract_funding_with_openai(api_key: str, start_date: str, end_date: str,
     else:
         sector_desc = "AI / artificial intelligence companies"
 
-    prompt = f"""Search the web for {sector_desc} funding rounds, investments, and acquisitions announced between {start_date} and {end_date}.
+    prompt = f"""Search the web for {sector_desc} funding rounds, investments, and acquisitions announced on {date}.
 
 For each funding event found, return a JSON object. Return a JSON array of objects with exactly these fields:
 - "date": announcement date in YYYY-MM-DD format
@@ -190,9 +181,11 @@ For each funding event found, return a JSON object. Return a JSON array of objec
 - "summary": one sentence describing what the company does (not the funding itself)
 - "stage": funding stage (Seed, Series A, Series B, etc., or "N/A" if unknown, or "Acquisition" if acquired)
 - "raise": amount raised (e.g. "$50M", "$1.2B", or "N/A" if unknown)
+- "valuation": post-money valuation (e.g. "$500M", "$1.2B", or "N/A" if unknown)
 - "investors": string listing lead investors (e.g. "Led by Sequoia, with Andreessen Horowitz")
 
-Only include actual funding events (money raised, acquisitions, IPOs). Return ONLY a valid JSON array, no other text."""
+Only include actual funding events (money raised, acquisitions, IPOs). If no events found, return an empty array [].
+Return ONLY a valid JSON array, no other text."""
 
     try:
         headers = {
@@ -224,7 +217,6 @@ Only include actual funding events (money raised, acquisitions, IPOs). Return ON
 
         content = result['choices'][0]['message']['content'].strip()
 
-        # Try to extract JSON array from content (model may wrap it in prose)
         json_match = re.search(r'```(?:json)?\s*(\[.*?\])\s*```', content, re.DOTALL)
         if json_match:
             content = json_match.group(1)
@@ -233,15 +225,58 @@ Only include actual funding events (money raised, acquisitions, IPOs). Return ON
             if array_match:
                 content = array_match.group(1)
             else:
-                # Model returned prose with no JSON (e.g. "no events found")
                 return []
 
-        funding_events = json.loads(content)
-        return funding_events if isinstance(funding_events, list) else []
+        events = json.loads(content)
+        return events if isinstance(events, list) else []
 
     except Exception as e:
-        print(f"  WARNING: Funding extraction failed: {e}")
+        print(f"  WARNING: Funding search failed for {date}: {e}")
         return []
+
+
+def extract_funding_with_openai(api_key: str, start_date: str, end_date: str,
+                               topic: str = 'ai') -> list:
+    """
+    Use OpenAI with web search to find funding events in a date range.
+    Searches day-by-day to avoid the model skipping dates in long ranges.
+
+    Args:
+        api_key: OpenAI API key
+        start_date: YYYY-MM-DD start date
+        end_date: YYYY-MM-DD end date
+        topic: 'ai' (default) or 'deeptech'
+
+    Returns:
+        List of funding event dicts with keys: date, company, summary, stage, raise, valuation, investors
+    """
+    from datetime import timedelta
+
+    start_dt = datetime.strptime(start_date, "%Y-%m-%d")
+    end_dt = datetime.strptime(end_date, "%Y-%m-%d")
+
+    all_events = []
+    current = start_dt
+    while current <= end_dt:
+        date_str = current.strftime("%Y-%m-%d")
+        print(f"  Searching {date_str}...")
+        events = _search_funding_single_day(api_key, date_str, topic)
+        print(f"    Found {len(events)} events")
+        all_events.extend(events)
+        current += timedelta(days=1)
+        time.sleep(1.0)  # rate limiting between days
+
+    # Deduplicate by company + date
+    seen = set()
+    unique = []
+    for e in all_events:
+        key = (e.get('company', '').lower().strip(), e.get('date', '')[:10])
+        if key not in seen:
+            seen.add(key)
+            unique.append(e)
+
+    print(f"  Total unique funding events: {len(unique)}")
+    return unique
 
 
 def create_funding_table(doc: Document, funding_events: list, heading: str = 'AI Fundraising News'):
@@ -263,17 +298,17 @@ def create_funding_table(doc: Document, funding_events: list, heading: str = 'AI
 
     doc.add_paragraph(f'Total: {len(funding_events)} funding events\n')
 
-    # Create table with 6 columns
-    table = doc.add_table(rows=1, cols=6)
+    # Create table with 7 columns
+    table = doc.add_table(rows=1, cols=7)
     table.style = 'Light Grid Accent 1'
 
     # Set column widths
-    col_widths = [Inches(0.85), Inches(1.0), Inches(2.2), Inches(0.7), Inches(0.7), Inches(1.55)]
+    col_widths = [Inches(0.85), Inches(1.0), Inches(2.0), Inches(0.65), Inches(0.65), Inches(0.75), Inches(1.3)]
     for i, width in enumerate(col_widths):
         table.columns[i].width = width
 
     # Header row
-    headers = ['Date', 'Company', 'Summary', 'Stage', 'Raise', 'Investors']
+    headers = ['Date', 'Company', 'Summary', 'Stage', 'Raise', 'Valuation', 'Investors']
     header_cells = table.rows[0].cells
     for i, h in enumerate(headers):
         header_cells[i].text = h
@@ -293,6 +328,7 @@ def create_funding_table(doc: Document, funding_events: list, heading: str = 'AI
             event.get('summary', 'N/A'),
             event.get('stage', 'N/A'),
             event.get('raise', 'N/A'),
+            event.get('valuation', 'N/A'),
             event.get('investors', 'N/A'),
         ]
         for i, val in enumerate(values):
@@ -325,6 +361,156 @@ def convert_bullets_to_paragraph(text: str) -> str:
 
     # Join with spaces to form paragraph
     return ' '.join(cleaned_lines)
+
+
+# ── Deeptech category grouping ─────────────────────────────────────────────────
+
+DEEPTECH_CATEGORY_ORDER = ["半导体", "机器人", "新能源", "其他"]
+
+DEEPTECH_CATEGORY_COLORS = {
+    "半导体": "E8F0FE",
+    "机器人": "E6F4EA",
+    "新能源": "FFF8E1",
+    "其他":   "F3E5F5",
+}
+
+SEMICONDUCTOR_KEYWORDS = [
+    "semiconductor", "chip", "芯片", "半导体", "wafer", "fab", "foundry",
+    "transistor", "lithography", "eda", "photonic", "asic", "fpga",
+    "nvidia", "intel", "amd", "tsmc", "arm ", "risc", "memory", "dram",
+    "nand", "soc", "gpu", "cpu", "mpu", "integrated circuit",
+]
+ROBOTICS_KEYWORDS = [
+    "robot", "机器人", "humanoid", "autonomous", "drone", "无人机",
+    "unmanned", "exoskeleton", "cobots", "manipulation", "locomotion",
+    "actuator", "servo", "mechatronics", "automation",
+]
+ENERGY_KEYWORDS = [
+    "energy", "新能源", "electric vehicle", "ev ", " ev\n", "solar",
+    "battery", "电池", "储能", "充电", "wind", "nuclear", "hydrogen",
+    "fuel cell", "grid", "power", "renewable", "carbon", "climate",
+    "clean tech", "cleantech", "charging", "inverter", "photovoltaic",
+]
+
+
+def classify_deeptech_article(article: dict) -> str:
+    """Classify a deeptech article into 半导体 | 机器人 | 新能源 | 其他."""
+    text = " " + " ".join([
+        article.get("title", ""),
+        article.get("summary", ""),
+        article.get("description", ""),
+    ]).lower() + " "
+
+    for kw in SEMICONDUCTOR_KEYWORDS:
+        if kw in text:
+            return "半导体"
+    for kw in ROBOTICS_KEYWORDS:
+        if kw in text:
+            return "机器人"
+    for kw in ENERGY_KEYWORDS:
+        if kw in text:
+            return "新能源"
+    return "其他"
+
+
+def _add_deeptech_header_row(table, label: str, fill_hex: str):
+    """Add a full-width merged header row for deeptech category sections."""
+    row = table.add_row()
+    row.cells[0].merge(row.cells[1])
+    cell = row.cells[0]
+
+    tc = cell._tc
+    tcPr = tc.get_or_add_tcPr()
+    shd = OxmlElement('w:shd')
+    shd.set(qn('w:val'), 'clear')
+    shd.set(qn('w:color'), 'auto')
+    shd.set(qn('w:fill'), fill_hex)
+    tcPr.append(shd)
+
+    para = cell.paragraphs[0]
+    para.alignment = WD_ALIGN_PARAGRAPH.LEFT
+    run = para.add_run(label)
+    run.bold = True
+    run.font.size = Pt(11)
+    run.font.color.rgb = RGBColor(31, 73, 125)
+
+
+def create_grouped_deeptech_table(
+    doc: Document,
+    articles: list,
+    chinese_only: bool = False,
+    translate: bool = False,
+    claude_key: str = None,
+    heading: str = '深科技新闻摘要',
+):
+    """Build a grouped deeptech news table: 半导体 → 机器人 → 新能源 → 其他."""
+    groups = {cat: [] for cat in DEEPTECH_CATEGORY_ORDER}
+    for article in articles:
+        groups[classify_deeptech_article(article)].append(article)
+
+    for cat in DEEPTECH_CATEGORY_ORDER:
+        groups[cat].sort(key=lambda x: x.get("published_at", ""))
+
+    total = sum(len(v) for v in groups.values())
+
+    h = doc.add_heading(heading, level=1)
+    h.alignment = WD_ALIGN_PARAGRAPH.LEFT
+    doc.add_paragraph(f'Total: {total} articles\n')
+
+    table = doc.add_table(rows=1, cols=2)
+    table.style = 'Light Grid Accent 1'
+    table.columns[0].width = Inches(1.0)
+    table.columns[1].width = Inches(6.0)
+
+    hdr = table.rows[0].cells
+    hdr[0].text = 'Date'
+    hdr[1].text = 'Summary'
+    for cell in hdr:
+        for para in cell.paragraphs:
+            for run in para.runs:
+                run.bold = True
+                run.font.size = Pt(12)
+
+    for cat in DEEPTECH_CATEGORY_ORDER:
+        cat_articles = groups[cat]
+        if not cat_articles:
+            continue
+
+        _add_deeptech_header_row(table, cat, DEEPTECH_CATEGORY_COLORS[cat])
+
+        for article in cat_articles:
+            row_cells = table.add_row().cells
+
+            date_str = format_date_for_display(article.get('published_at', ''))
+            row_cells[0].paragraphs[0].add_run(date_str).font.size = Pt(10)
+
+            summary_para = row_cells[1].paragraphs[0]
+            title = article.get('title', 'No title')
+            url = article.get('url', '')
+            if url:
+                add_hyperlink(summary_para, url, title)
+            else:
+                run = summary_para.add_run(title)
+                run.bold = True
+                run.font.size = Pt(10)
+
+            summary = article.get('summary', article.get('description', ''))
+            summary_text = convert_bullets_to_paragraph(summary)
+            summary_para.add_run('\n\n')
+
+            if chinese_only:
+                add_formatted_text(summary_para, summary_text, font_size=10)
+            elif translate and claude_key:
+                chinese = translate_to_chinese_claude(claude_key, summary_text)
+                if chinese:
+                    add_formatted_text(summary_para, chinese, font_size=10)
+                    time.sleep(0.3)
+                summary_para.add_run('\n\n')
+                add_formatted_text(summary_para, summary_text, font_size=10)
+            else:
+                add_formatted_text(summary_para, summary_text, font_size=10)
+
+    return table
 
 
 def create_news_table(doc: Document, articles: list, max_articles: int = None, translate: bool = False, claude_key: str = None, chinese_only: bool = False):
@@ -493,9 +679,12 @@ def generate_word_doc(start_date: str, end_date: str,
     doc.add_paragraph(f'Total Articles Collected: {len(articles)}')
     doc.add_paragraph('')
 
-    # Create news table
+    # Create news table (grouped for deeptech, flat for others)
     print("Creating news table...")
-    create_news_table(doc, articles, max_articles, translate, claude_key, chinese_only)
+    if funding_topic == 'deeptech':
+        create_grouped_deeptech_table(doc, articles, chinese_only, translate, claude_key)
+    else:
+        create_news_table(doc, articles, max_articles, translate, claude_key, chinese_only)
 
     # Create funding section
     topic_label = "Deeptech" if funding_topic == "deeptech" else "AI"
