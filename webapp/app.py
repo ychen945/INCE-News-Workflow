@@ -269,10 +269,12 @@ def stream(job_id):
         q = jobs[job_id]["queue"]
         while True:
             try:
-                msg = q.get(timeout=600)
+                msg = q.get(timeout=15)
             except queue.Empty:
-                yield "data: [stream timeout]\n\n"
-                break
+                if jobs[job_id]["status"] != "running":
+                    break
+                yield ": keepalive\n\n"  # SSE comment keeps proxy from closing idle connection
+                continue
             if msg is None:   # sentinel
                 status = jobs[job_id]["status"]
                 if status == "done":

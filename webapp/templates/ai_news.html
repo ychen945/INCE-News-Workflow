@@ -190,38 +190,50 @@
       return;
     }
 
-    const es = new EventSource('/stream/' + currentJobId);
-    es.onmessage = (ev) => {
-      const msg = ev.data;
-      if (msg === '__DONE__') {
+    let reconnectAttempts = 0;
+    function connectStream() {
+      const es = new EventSource('/stream/' + currentJobId);
+      es.onmessage = (ev) => {
+        reconnectAttempts = 0;
+        const msg = ev.data;
+        if (msg === '__DONE__') {
+          es.close();
+          statusBadge.textContent = 'Done ✓';
+          statusBadge.className = 'text-xs px-2.5 py-1 rounded-full font-medium bg-green-100 text-green-700';
+          downloadBtn.href = '/download/' + currentJobId;
+          downloadSection.classList.remove('hidden');
+          resetButtons();
+        } else if (msg === '__STOPPED__') {
+          es.close();
+          statusBadge.textContent = 'Stopped';
+          statusBadge.className = 'text-xs px-2.5 py-1 rounded-full font-medium bg-yellow-100 text-yellow-700';
+          stoppedSection.classList.remove('hidden');
+          resetButtons();
+        } else if (msg === '__ERROR__') {
+          es.close();
+          statusBadge.textContent = 'Error ✗';
+          statusBadge.className = 'text-xs px-2.5 py-1 rounded-full font-medium bg-red-100 text-red-700';
+          errorSection.classList.remove('hidden');
+          resetButtons();
+        } else {
+          appendLog(msg);
+        }
+      };
+      es.onerror = () => {
         es.close();
-        statusBadge.textContent = 'Done ✓';
-        statusBadge.className = 'text-xs px-2.5 py-1 rounded-full font-medium bg-green-100 text-green-700';
-        downloadBtn.href = '/download/' + currentJobId;
-        downloadSection.classList.remove('hidden');
-        resetButtons();
-      } else if (msg === '__STOPPED__') {
-        es.close();
-        statusBadge.textContent = 'Stopped';
-        statusBadge.className = 'text-xs px-2.5 py-1 rounded-full font-medium bg-yellow-100 text-yellow-700';
-        stoppedSection.classList.remove('hidden');
-        resetButtons();
-      } else if (msg === '__ERROR__') {
-        es.close();
-        statusBadge.textContent = 'Error ✗';
-        statusBadge.className = 'text-xs px-2.5 py-1 rounded-full font-medium bg-red-100 text-red-700';
-        errorSection.classList.remove('hidden');
-        resetButtons();
-      } else {
-        appendLog(msg);
-      }
-    };
-    es.onerror = () => {
-      es.close();
-      statusBadge.textContent = 'Connection lost';
-      statusBadge.className = 'text-xs px-2.5 py-1 rounded-full font-medium bg-yellow-100 text-yellow-700';
-      resetButtons();
-    };
+        reconnectAttempts++;
+        if (reconnectAttempts <= 5) {
+          statusBadge.textContent = 'Reconnecting…';
+          statusBadge.className = 'text-xs px-2.5 py-1 rounded-full font-medium bg-yellow-100 text-yellow-700';
+          setTimeout(connectStream, 3000);
+        } else {
+          statusBadge.textContent = 'Connection lost';
+          statusBadge.className = 'text-xs px-2.5 py-1 rounded-full font-medium bg-yellow-100 text-yellow-700';
+          resetButtons();
+        }
+      };
+    }
+    connectStream();
   });
 }());
 </script>
