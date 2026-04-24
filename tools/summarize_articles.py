@@ -570,6 +570,9 @@ def summarize_articles(input_file: str = '.tmp/classified_articles.json',
         article['full_content_fetched'] = bool(content)
         summarized_articles.append(article)
 
+        if len(summarized_articles) % 10 == 0:
+            print(f"  → Summarized {len(summarized_articles)}/{len(articles)} articles so far...")
+
     if skipped_count > 0:
         print(f"\n✓ Summarization complete ({len(summarized_articles)} articles, {skipped_count} X/Twitter links skipped)")
     else:

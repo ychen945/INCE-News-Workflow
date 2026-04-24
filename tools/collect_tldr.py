@@ -61,7 +61,7 @@ PROMOTIONAL_FILTERS = [
 # TLDR AI: Only Headlines & Launches (~3-6 articles/day)
 # TLDR Main: Big Tech & Startups + Miscellaneous (~4-6 articles/day)
 TLDR_AI_SECTIONS = ['headlines & launches']
-TLDR_MAIN_SECTIONS = ['big tech & startups', 'miscellaneous']
+TLDR_MAIN_SECTIONS = ['big tech & startups']
 
 # All known sections (used to detect section boundaries)
 ALL_KNOWN_SECTIONS = [
