@@ -80,13 +80,15 @@ def _run_cmd(job_id: str, cmd: list, cwd: str = None) -> int:
         return -1
 
     cwd = cwd or str(BASE_DIR)
+    env = os.environ.copy()
+    env["PYTHONUNBUFFERED"] = "1"
     proc = subprocess.Popen(
         cmd,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,
         cwd=cwd,
-        env=os.environ.copy(),
+        env=env,
     )
 
     # Register the process so /stop can kill it
@@ -381,7 +383,7 @@ def _pipeline_ai_news(job_id, start_date, end_date, wechat_urls, language):
         # Phase 5: Summarise
         _log(job_id, "=== [5/6] Summarising with Claude ===")
         summarized = str(tmp / "summarized_articles.json")
-        lang_args = ["--language", "zh"] if language in ("zh", "both") else []
+        lang_args = ["--language", "zh"] if language == "zh" else []
         if _run_cmd(job_id, [
             py, str(TOOLS_DIR / "summarize_articles.py"),
             "--input", classified, "--output", summarized,

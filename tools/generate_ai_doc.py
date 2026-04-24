@@ -72,18 +72,68 @@ def is_fundraising_article(article: dict) -> bool:
     return matches >= 2
 
 
-def article_to_funding_event(article: dict) -> dict:
-    """Convert a summarized article into the funding event dict format."""
+def article_to_funding_event(article: dict, claude_key: str = None) -> dict:
+    """Use Claude to extract structured funding info from a detected funding article."""
+    title = article.get("title", "")
+    summary = article.get("summary", article.get("description", ""))
+    date = article.get("published_at", "")[:10]
+
+    if claude_key:
+        try:
+            prompt = (
+                f"Extract funding information from this news article.\n\n"
+                f"Title: {title}\nSummary: {summary}\n\n"
+                f"Return a JSON object with exactly these fields:\n"
+                f'- "company": the company that received funding\n'
+                f'- "summary": ONE sentence describing what the company does (not the funding itself)\n'
+                f'- "stage": funding stage (Seed, Series A, Series B, etc., "Acquisition", or "N/A")\n'
+                f'- "raise": amount raised (e.g. "$50M", "$1.2B", or "N/A")\n'
+                f'- "valuation": post-money valuation (e.g. "$500M", or "N/A")\n'
+                f'- "investors": lead investors (e.g. "Led by Sequoia" or "N/A")\n\n'
+                f"Return ONLY valid JSON, no other text."
+            )
+            response = requests.post(
+                "https://api.anthropic.com/v1/messages",
+                headers={
+                    "Content-Type": "application/json",
+                    "x-api-key": claude_key,
+                    "anthropic-version": "2023-06-01",
+                },
+                json={
+                    "model": "claude-haiku-4-5-20251001",
+                    "max_tokens": 300,
+                    "messages": [{"role": "user", "content": prompt}],
+                },
+                timeout=30,
+            )
+            response.raise_for_status()
+            text = response.json()["content"][0]["text"].strip()
+            text = re.sub(r"^```json\s*", "", text)
+            text = re.sub(r"\s*```$", "", text)
+            data = json.loads(text)
+            return {
+                "date": date,
+                "company": data.get("company", title),
+                "summary": data.get("summary", ""),
+                "stage": data.get("stage", "N/A"),
+                "raise": data.get("raise", "N/A"),
+                "valuation": data.get("valuation", "N/A"),
+                "investors": data.get("investors", "N/A"),
+                "_url": article.get("url", ""),
+            }
+        except Exception as e:
+            print(f"    WARNING: extraction failed ({e}), using fallback")
+
+    # Fallback: no API key or extraction failed
+    raw = summary.split(".")[0] if summary else title
     return {
-        "date": article.get("published_at", "")[:10],
-        "company": "",   # model will fill from title/summary
-        "summary": article.get("summary", article.get("description", "")),
+        "date": date,
+        "company": title,
+        "summary": raw[:200],
         "stage": "N/A",
         "raise": "N/A",
         "valuation": "N/A",
         "investors": "N/A",
-        # Keep title so the funding table can display it
-        "_title": article.get("title", ""),
         "_url": article.get("url", ""),
     }
 
@@ -344,18 +394,20 @@ def generate_ai_doc(
     print("Creating grouped news table...")
     create_grouped_news_table(doc, regular_articles, chinese_only, translate, claude_key)
 
+    anthropic_key = claude_key or os.getenv("ANTHROPIC_API_KEY")
+
+    if funding_articles:
+        print(f"Extracting funding details from {len(funding_articles)} detected article(s)...")
+        detected = []
+        for i, a in enumerate(funding_articles, 1):
+            print(f"  [{i}/{len(funding_articles)}] {a.get('title', '')[:70]}...")
+            detected.append(article_to_funding_event(a, anthropic_key))
+    else:
+        detected = []
+
     print("Searching for AI funding news with ChatGPT (day by day)...")
     if openai_key:
         funding_events = extract_funding_with_openai(openai_key, start_date, end_date)
-        # Merge in any fundraising articles detected from the news feed
-        detected = [article_to_funding_event(a) for a in funding_articles]
-        # Use title as company name if company field is empty
-        for e in detected:
-            if not e["company"]:
-                e["company"] = e.pop("_title", "")
-            else:
-                e.pop("_title", None)
-            e.pop("_url", None)
         all_funding = funding_events + detected
         print(f"  Found {len(funding_events)} from web search + {len(detected)} detected from articles")
         create_funding_table(doc, all_funding)

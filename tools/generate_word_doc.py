@@ -255,11 +255,16 @@ def extract_funding_with_openai(api_key: str, start_date: str, end_date: str,
     start_dt = datetime.strptime(start_date, "%Y-%m-%d")
     end_dt = datetime.strptime(end_date, "%Y-%m-%d")
 
+    total_days = (end_dt - start_dt).days + 1
+    print(f"  Searching {total_days} day(s): {start_date} to {end_date}")
+
     all_events = []
     current = start_dt
+    day_num = 0
     while current <= end_dt:
+        day_num += 1
         date_str = current.strftime("%Y-%m-%d")
-        print(f"  Searching {date_str}...")
+        print(f"  [{day_num}/{total_days}] Searching {date_str}...")
         events = _search_funding_single_day(api_key, date_str, topic)
         print(f"    Found {len(events)} events")
         all_events.extend(events)
