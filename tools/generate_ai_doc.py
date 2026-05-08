@@ -60,37 +60,32 @@ FUNDRAISING_KEYWORDS = [
 ]
 
 
-def is_fundraising_article(article: dict) -> bool:
-    """Return True if the article is primarily about a funding/acquisition event."""
-    text = " ".join([
-        article.get("title", ""),
-        article.get("summary", ""),
-        article.get("description", ""),
-    ]).lower()
-    # Require at least 2 distinct keyword matches to reduce false positives
-    matches = sum(1 for kw in FUNDRAISING_KEYWORDS if kw in text)
-    return matches >= 2
+def is_fundraising_article(_article: dict) -> bool:
+    """Disabled — all articles go to the main news table."""
+    return False
 
 
 def article_to_funding_event(article: dict, claude_key: str = None) -> dict:
     """Use Claude to extract structured funding info from a detected funding article."""
     title = article.get("title", "")
-    summary = article.get("summary", article.get("description", ""))
+    # Prefer full article content over the condensed summary so founder details aren't lost
+    body = article.get("content") or article.get("summary") or article.get("description", "")
     date = article.get("published_at", "")[:10]
 
     if claude_key:
         try:
             prompt = (
-                f"Extract funding information from this news article.\n\n"
-                f"Title: {title}\nSummary: {summary}\n\n"
-                f"Return a JSON object with exactly these fields:\n"
-                f'- "company": the company that received funding\n'
-                f'- "summary": ONE sentence describing what the company does (not the funding itself)\n'
-                f'- "stage": funding stage (Seed, Series A, Series B, etc., "Acquisition", or "N/A")\n'
-                f'- "raise": amount raised (e.g. "$50M", "$1.2B", or "N/A")\n'
-                f'- "valuation": post-money valuation (e.g. "$500M", or "N/A")\n'
-                f'- "investors": lead investors (e.g. "Led by Sequoia" or "N/A")\n\n'
-                f"Return ONLY valid JSON, no other text."
+                f"从以下新闻文章中提取融资信息，所有字段均用中文填写。\n\n"
+                f"标题：{title}\n文章正文：{body}\n\n"
+                f"返回一个JSON对象，包含以下字段：\n"
+                f'"company": 获得融资的公司名称\n'
+                f'"summary": 用中文描述该公司，包含：(1) 一句话说明公司核心业务，(2) 如文章中提到创始人背景信息，请附上（姓名、曾任职的公司和职责）。'
+                f'参考格式："AI-native 网络安全公司，用 AI agent 实时检测攻击并自动响应。创始人 XX 曾负责 Amazon Web Services GuardDuty"\n'
+                f'"stage": 融资轮次（天使轮、Pre-A轮、A轮、B轮、C轮等，收购填"收购"，未知填"不详"）\n'
+                f'"raise": 融资金额（例如："5000万美元"，未知填"不详"）\n'
+                f'"valuation": 融资后估值（例如："5亿美元"，未知填"不详"）\n'
+                f'"investors": 主要投资方（例如："领投：红杉资本"，未知填"不详"）\n\n'
+                f"仅返回有效JSON，不要包含其他文字。"
             )
             response = requests.post(
                 "https://api.anthropic.com/v1/messages",
@@ -125,7 +120,7 @@ def article_to_funding_event(article: dict, claude_key: str = None) -> dict:
             print(f"    WARNING: extraction failed ({e}), using fallback")
 
     # Fallback: no API key or extraction failed
-    raw = summary.split(".")[0] if summary else title
+    raw = body.split(".")[0] if body else title
     return {
         "date": date,
         "company": title,
@@ -339,6 +334,8 @@ def generate_ai_doc(
     translate: bool = False,
     chinese_only: bool = False,
     output_prefix: str = "AI_News",
+    no_funding: bool = False,
+    funding_wechat_file: str = None,
 ):
     load_dotenv()
 
@@ -355,11 +352,15 @@ def generate_ai_doc(
 
     print(f"Loaded {len(articles)} articles")
 
-    # Separate fundraising articles from regular news
-    regular_articles = [a for a in articles if not is_fundraising_article(a)]
-    funding_articles = [a for a in articles if is_fundraising_article(a)]
-    if funding_articles:
-        print(f"  Detected {len(funding_articles)} fundraising articles — moving to funding table")
+    # Separate fundraising articles from regular news (unless disabled)
+    if no_funding:
+        regular_articles = articles
+        funding_articles = []
+    else:
+        regular_articles = [a for a in articles if not is_fundraising_article(a)]
+        funding_articles = [a for a in articles if is_fundraising_article(a)]
+        if funding_articles:
+            print(f"  Detected {len(funding_articles)} fundraising articles — moving to funding table")
 
     claude_key = None
     if translate:
@@ -388,31 +389,39 @@ def generate_ai_doc(
         run.font.color.rgb = RGBColor(128, 128, 128)
 
     doc.add_paragraph(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}")
-    doc.add_paragraph(f"Total Articles: {len(regular_articles)} (+ {len(funding_articles)} moved to funding table)")
+    total_str = str(len(regular_articles))
+    if not no_funding and funding_articles:
+        total_str += f" (+ {len(funding_articles)} moved to funding table)"
+    doc.add_paragraph(f"Total Articles: {total_str}")
     doc.add_paragraph("")
 
     print("Creating grouped news table...")
     create_grouped_news_table(doc, regular_articles, chinese_only, translate, claude_key)
 
-    anthropic_key = claude_key or os.getenv("ANTHROPIC_API_KEY")
+    if not no_funding:
+        anthropic_key = claude_key or os.getenv("ANTHROPIC_API_KEY")
 
-    if funding_articles:
-        print(f"Extracting funding details from {len(funding_articles)} detected article(s)...")
-        detected = []
-        for i, a in enumerate(funding_articles, 1):
-            print(f"  [{i}/{len(funding_articles)}] {a.get('title', '')[:70]}...")
-            detected.append(article_to_funding_event(a, anthropic_key))
-    else:
-        detected = []
+        # Load WeChat fundraising articles if provided
+        wechat_funding = []
+        if funding_wechat_file and os.path.exists(funding_wechat_file):
+            with open(funding_wechat_file, "r", encoding="utf-8") as f:
+                wechat_funding_articles = json.load(f)
+            print(f"Extracting funding details from {len(wechat_funding_articles)} WeChat fundraising article(s)...")
+            for i, a in enumerate(wechat_funding_articles, 1):
+                print(f"  [{i}/{len(wechat_funding_articles)}] {a.get('title', '')[:70]}...")
+                wechat_funding.append(article_to_funding_event(a, anthropic_key))
 
-    print("Searching for AI funding news with ChatGPT (day by day)...")
-    if openai_key:
-        funding_events = extract_funding_with_openai(openai_key, start_date, end_date)
-        all_funding = funding_events + detected
-        print(f"  Found {len(funding_events)} from web search + {len(detected)} detected from articles")
-        create_funding_table(doc, all_funding)
-    else:
-        print("  WARNING: OPENAI_API_KEY not set — skipping funding section")
+        print("Searching for AI funding news with ChatGPT (day by day)...")
+        if openai_key:
+            funding_events = extract_funding_with_openai(openai_key, start_date, end_date)
+            all_funding = funding_events + wechat_funding
+            print(f"  Found {len(funding_events)} from web search + {len(wechat_funding)} from WeChat")
+            create_funding_table(doc, all_funding)
+        elif wechat_funding:
+            print("  OPENAI_API_KEY not set — using WeChat fundraising articles only")
+            create_funding_table(doc, wechat_funding)
+        else:
+            print("  WARNING: OPENAI_API_KEY not set — skipping funding section")
 
     os.makedirs(output_dir, exist_ok=True)
     filename = f"{output_prefix}_{start_date.replace('-','')}_{end_date.replace('-','')}.docx"
@@ -432,7 +441,9 @@ def main():
     parser.add_argument("--max", type=int, default=None)
     parser.add_argument("--translate", action="store_true", help="Add Chinese translation")
     parser.add_argument("--chinese-only", action="store_true", help="Chinese summary only")
+    parser.add_argument("--no-funding", action="store_true", help="Skip funding detection and funding table")
     parser.add_argument("--output-prefix", default="AI_News")
+    parser.add_argument("--funding-wechat", default=None, help="Path to summarized WeChat fundraising articles JSON")
     args = parser.parse_args()
 
     generate_ai_doc(
@@ -444,6 +455,8 @@ def main():
         args.translate,
         args.chinese_only,
         args.output_prefix,
+        args.no_funding,
+        args.funding_wechat,
     )
 
 

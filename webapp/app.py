@@ -192,7 +192,8 @@ def run_ai_news():
     threading.Thread(
         target=_pipeline_ai_news,
         args=(job_id, data.get("start_date"), data.get("end_date"),
-              data.get("wechat_urls", ""), data.get("language", "zh")),
+              data.get("wechat_urls", ""), data.get("language", "zh"),
+              data.get("wechat_funding_urls", "")),
         daemon=True,
     ).start()
     return jsonify({"job_id": job_id})
@@ -315,7 +316,7 @@ def download(job_id):
 
 # ── Pipeline: AI News ─────────────────────────────────────────────────────────
 
-def _pipeline_ai_news(job_id, start_date, end_date, wechat_urls, language):
+def _pipeline_ai_news(job_id, start_date, end_date, wechat_urls, language, wechat_funding_urls=""):
     try:
         tmp = TMP_DIR / job_id
         tmp.mkdir(parents=True, exist_ok=True)
@@ -324,7 +325,7 @@ def _pipeline_ai_news(job_id, start_date, end_date, wechat_urls, language):
         py = sys.executable
 
         # Phase 1: TechCrunch
-        _log(job_id, "=== [1/6] Collecting TechCrunch ===")
+        _log(job_id, "=== [1/7] Collecting TechCrunch ===")
         tc_out = str(tmp / "raw_techcrunch.json")
         if _run_cmd(job_id, [
             py, str(TOOLS_DIR / "collect_techcrunch.py"),
@@ -333,17 +334,17 @@ def _pipeline_ai_news(job_id, start_date, end_date, wechat_urls, language):
         ]) == -1: return
 
         # Phase 2: TLDR
-        _log(job_id, "=== [2/6] Collecting TLDR newsletters ===")
+        _log(job_id, "=== [2/7] Collecting TLDR newsletters ===")
         if _run_cmd(job_id, [
             py, str(TOOLS_DIR / "collect_tldr.py"),
             "--start_date", start_date, "--end_date", end_date,
             "--output_dir", str(tmp),
         ]) == -1: return
 
-        # Phase 3: WeChat (optional)
+        # Phase 3: WeChat news articles (optional)
         wechat_articles = []
         if wechat_urls.strip():
-            _log(job_id, "=== [3/6] Collecting WeChat articles ===")
+            _log(job_id, "=== [3/7] Collecting WeChat news articles ===")
             urls_file = _save_wechat_urls(job_id, wechat_urls, tmp)
             if urls_file:
                 wc_out = str(tmp / "raw_wechat.json")
@@ -355,12 +356,45 @@ def _pipeline_ai_news(job_id, start_date, end_date, wechat_urls, language):
                     with open(wc_out, encoding="utf-8") as f:
                         wechat_articles = json.load(f)
         else:
-            _log(job_id, "=== [3/6] No WeChat URLs — skipping ===")
+            _log(job_id, "=== [3/7] No WeChat news URLs — skipping ===")
 
         if _is_stopped(job_id): return
 
-        # Phase 4: Deduplicate
-        _log(job_id, "=== [4/6] Deduplicating ===")
+        # Phase 4: WeChat fundraising articles (optional)
+        funding_wechat_summarized = None
+        if wechat_funding_urls.strip():
+            _log(job_id, "=== [4/7] Collecting WeChat fundraising articles ===")
+            funding_urls_file = tmp / "wechat_funding_urls.txt"
+            funding_urls = [
+                u.strip() for u in wechat_funding_urls.splitlines()
+                if u.strip() and not u.strip().startswith("#")
+            ]
+            funding_urls_file.write_text("\n".join(funding_urls), encoding="utf-8")
+            _log(job_id, f"Saved {len(funding_urls)} fundraising WeChat URLs")
+
+            wc_funding_raw = str(tmp / "raw_wechat_funding.json")
+            if _run_cmd(job_id, [
+                py, str(TOOLS_DIR / "collect_wechat.py"),
+                "--urls", str(funding_urls_file), "--output", wc_funding_raw,
+            ]) == -1: return
+
+            if os.path.exists(wc_funding_raw):
+                wc_funding_summarized = str(tmp / "summarized_wechat_funding.json")
+                if _run_cmd(job_id, [
+                    py, str(TOOLS_DIR / "summarize_articles.py"),
+                    "--input", wc_funding_raw, "--output", wc_funding_summarized,
+                    "--provider", "claude", "--yes",
+                    "--language", "zh", "--skip-fetch",
+                ]) == -1: return
+                if os.path.exists(wc_funding_summarized):
+                    funding_wechat_summarized = wc_funding_summarized
+        else:
+            _log(job_id, "=== [4/7] No WeChat fundraising URLs — skipping ===")
+
+        if _is_stopped(job_id): return
+
+        # Phase 5: Deduplicate
+        _log(job_id, "=== [5/7] Deduplicating ===")
         all_articles = []
         for fname in ("raw_tldr_ai.json", "raw_tldr_main.json", "raw_techcrunch.json"):
             p = tmp / fname
@@ -380,8 +414,8 @@ def _pipeline_ai_news(job_id, start_date, end_date, wechat_urls, language):
         if not unique:
             raise RuntimeError("No articles collected — check API keys and date range")
 
-        # Phase 5: Summarise
-        _log(job_id, "=== [5/6] Summarising with Claude ===")
+        # Phase 6: Summarise
+        _log(job_id, "=== [6/7] Summarising with Claude ===")
         summarized = str(tmp / "summarized_articles.json")
         lang_args = ["--language", "zh"] if language == "zh" else []
         if _run_cmd(job_id, [
@@ -390,20 +424,21 @@ def _pipeline_ai_news(job_id, start_date, end_date, wechat_urls, language):
             "--provider", "claude", "--yes",
         ] + lang_args) == -1: return
 
-        # Phase 6: Generate grouped Word doc
-        _log(job_id, "=== [6/6] Generating Word document ===")
+        # Phase 7: Generate grouped Word doc
+        _log(job_id, "=== [7/7] Generating Word document ===")
         mode_args = (
             ["--chinese-only"] if language == "zh"
             else ["--translate"] if language == "both"
             else []
         )
+        funding_args = ["--funding-wechat", funding_wechat_summarized] if funding_wechat_summarized else []
         if _run_cmd(job_id, [
             py, str(TOOLS_DIR / "generate_ai_doc.py"),
             "--start_date", start_date, "--end_date", end_date,
             "--articles", summarized,
             "--output_dir", str(out),
             "--output-prefix", "AI_News",
-        ] + mode_args) == -1: return
+        ] + mode_args + funding_args) == -1: return
 
         output_file = _find_output(job_id, out, start_date, end_date, "AI_News")
         if output_file:

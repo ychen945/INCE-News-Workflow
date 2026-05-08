@@ -166,26 +166,24 @@ def _search_funding_single_day(api_key: str, date: str, topic: str) -> list:
     Returns list of funding event dicts.
     """
     if topic == 'deeptech':
-        sector_desc = (
-            "deep technology companies — including robotics, advanced materials, quantum computing, "
-            "biotech/medtech, space technology, semiconductors, clean energy, and other science-based startups"
-        )
+        sector_desc = "深科技公司（包括机器人、先进材料、量子计算、生物/医疗科技、航天、半导体、清洁能源等硬科技领域）"
     else:
-        sector_desc = "AI / artificial intelligence companies"
+        sector_desc = "AI / 人工智能公司"
 
-    prompt = f"""Search the web for {sector_desc} funding rounds, investments, and acquisitions announced on {date}.
+    prompt = f"""搜索网络，找出{date}宣布的{sector_desc}融资轮次、投资和收购事件。
 
-For each funding event found, return a JSON object. Return a JSON array of objects with exactly these fields:
-- "date": announcement date in YYYY-MM-DD format
-- "company": company name that received funding
-- "summary": one sentence describing what the company does (not the funding itself)
-- "stage": funding stage (Seed, Series A, Series B, etc., or "N/A" if unknown, or "Acquisition" if acquired)
-- "raise": amount raised (e.g. "$50M", "$1.2B", or "N/A" if unknown)
-- "valuation": post-money valuation (e.g. "$500M", "$1.2B", or "N/A" if unknown)
-- "investors": string listing lead investors (e.g. "Led by Sequoia, with Andreessen Horowitz")
+对于每个融资事件，返回一个JSON对象。返回一个包含以下字段的JSON数组：
+- "date": 宣布日期，格式为YYYY-MM-DD
+- "company": 获得融资的公司名称
+- "summary": 用中文描述该公司，包含：(1) 一句话说明公司的核心业务，(2) 如网上有创始人相关背景信息，请附上（例如：曾就职的知名公司、负责的项目、相关行业经验等）。参考格式："AI-native 网络安全公司，用 AI agent 实时检测攻击并自动响应。创始人 XX 曾负责 Amazon Web Services GuardDuty，联合创始人 YY 曾在 Abnormal AI 负责机器学习"
+- "stage": 融资轮次（天使轮、Pre-A轮、A轮、B轮、C轮等，如为收购则填"收购"，未知填"不详"）
+- "raise": 融资金额（例如："5000万美元"、"12亿美元"，未知填"不详"）
+- "valuation": 融资后估值（例如："5亿美元"、"12亿美元"，未知填"不详"）
+- "investors": 主要投资方（例如："领投：红杉资本，跟投：Andreessen Horowitz"，未知填"不详"）
+- "url": 最相关的新闻来源链接（如有则填完整URL，否则填""）
 
-Only include actual funding events (money raised, acquisitions, IPOs). If no events found, return an empty array [].
-Return ONLY a valid JSON array, no other text."""
+只包含实际融资事件（已筹集资金、收购、IPO）。如未找到任何事件，返回空数组[]。
+仅返回有效的JSON数组，不要包含其他文字。"""
 
     try:
         headers = {
@@ -284,9 +282,9 @@ def extract_funding_with_openai(api_key: str, start_date: str, end_date: str,
     return unique
 
 
-def create_funding_table(doc: Document, funding_events: list, heading: str = 'AI Fundraising News'):
+def create_funding_table(doc: Document, funding_events: list, heading: str = 'AI 融资动态'):
     """
-    Add Fundraising News section with a 6-column table.
+    Add Fundraising News section with a 7-column table (all Chinese).
 
     Args:
         doc: Document object
@@ -298,10 +296,10 @@ def create_funding_table(doc: Document, funding_events: list, heading: str = 'AI
     h.alignment = WD_ALIGN_PARAGRAPH.LEFT
 
     if not funding_events:
-        doc.add_paragraph('No funding events found in this date range.')
+        doc.add_paragraph('该时间段内未发现融资事件。')
         return
 
-    doc.add_paragraph(f'Total: {len(funding_events)} funding events\n')
+    doc.add_paragraph(f'共 {len(funding_events)} 条融资记录\n')
 
     # Create table with 7 columns
     table = doc.add_table(rows=1, cols=7)
@@ -312,11 +310,11 @@ def create_funding_table(doc: Document, funding_events: list, heading: str = 'AI
     for i, width in enumerate(col_widths):
         table.columns[i].width = width
 
-    # Header row
-    headers = ['Date', 'Company', 'Summary', 'Stage', 'Raise', 'Valuation', 'Investors']
+    # Header row (Chinese)
+    headers = ['日期', '公司', '概述', '轮次', '融资额', '估值', '投资方']
     header_cells = table.rows[0].cells
-    for i, h in enumerate(headers):
-        header_cells[i].text = h
+    for i, h_text in enumerate(headers):
+        header_cells[i].text = h_text
         for run in header_cells[i].paragraphs[0].runs:
             run.bold = True
             run.font.size = Pt(10)
@@ -327,16 +325,32 @@ def create_funding_table(doc: Document, funding_events: list, heading: str = 'AI
     # Data rows
     for event in funding_events:
         row_cells = table.add_row().cells
-        values = [
-            event.get('date', '')[:10],
-            event.get('company', 'N/A'),
-            event.get('summary', 'N/A'),
-            event.get('stage', 'N/A'),
-            event.get('raise', 'N/A'),
-            event.get('valuation', 'N/A'),
-            event.get('investors', 'N/A'),
+
+        # Col 0: date
+        date_run = row_cells[0].paragraphs[0].add_run(event.get('date', '')[:10])
+        date_run.font.size = Pt(9)
+
+        # Col 1: company name, hyperlinked if URL available
+        company = event.get('company', '不详')
+        url = event.get('url', event.get('_url', ''))
+        company_para = row_cells[1].paragraphs[0]
+        if url:
+            add_hyperlink(company_para, url, company)
+            for r in company_para.runs:
+                r.font.size = Pt(9)
+        else:
+            run = company_para.add_run(company)
+            run.font.size = Pt(9)
+
+        # Cols 2-6: remaining fields
+        remaining = [
+            event.get('summary', '不详'),
+            event.get('stage', '不详'),
+            event.get('raise', '不详'),
+            event.get('valuation', '不详'),
+            event.get('investors', '不详'),
         ]
-        for i, val in enumerate(values):
+        for i, val in enumerate(remaining, start=2):
             para = row_cells[i].paragraphs[0]
             run = para.add_run(str(val))
             run.font.size = Pt(9)
@@ -697,7 +711,8 @@ def generate_word_doc(start_date: str, end_date: str,
     if openai_key:
         funding_events = extract_funding_with_openai(openai_key, start_date, end_date, funding_topic)
         print(f"  Found {len(funding_events)} funding events")
-        create_funding_table(doc, funding_events, heading=f"{topic_label} Fundraising News")
+        heading_map = {"AI": "AI 融资动态", "Deeptech": "深科技融资动态"}
+        create_funding_table(doc, funding_events, heading=heading_map.get(topic_label, f"{topic_label} 融资动态"))
     else:
         print("  WARNING: OPENAI_API_KEY not set, skipping funding section")
 
